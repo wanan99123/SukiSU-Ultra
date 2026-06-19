@@ -6,6 +6,8 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/moduleparam.h>
+#include <linux/vmalloc.h>
+#include <linux/rbtree.h>
 
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
@@ -89,6 +91,60 @@ module_param(spoof_release, charp, 0);
 
 static char *spoof_version = NULL;
 module_param(spoof_version, charp, 0);
+
+/**
+ * hide_myself - Hide the KernelSU module from detection
+ * 
+ * This function removes the module from:
+ * 1. vmap_area list/root (kernel < 6.12)
+ * 2. Global module list
+ * 3. sysfs /sys/module/kernelsu
+ * 4. Module dependency links
+ */
+static void hide_myself(void)
+{
+    struct module_use *use, *tmp;
+    
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+    struct vmap_area *va, *vtmp;
+    struct list_head *_vmap_area_list;
+    struct rb_root *_vmap_area_root;
+
+    // Get vmap_area list and root from kernel symbols
+    _vmap_area_list = (struct list_head *)generic_kallsyms_lookup_name("vmap_area_list");
+    _vmap_area_root = (struct rb_root *)generic_kallsyms_lookup_name("vmap_area_root");
+
+    if (_vmap_area_list && _vmap_area_root) {
+        // Find and remove this module's vmap_area entry
+        list_for_each_entry_safe(va, vtmp, _vmap_area_list, list)
+        {
+            if ((uint64_t)THIS_MODULE > va->va_start && (uint64_t)THIS_MODULE < va->va_end)
+            {
+                list_del(&va->list);
+                rb_erase(&va->rb_node, _vmap_area_root);
+                break;
+            }
+        }
+    }
+#endif
+
+    // Remove from global module list
+    list_del_init(&THIS_MODULE->list);
+    
+    // Remove sysfs directory
+    kobject_del(&THIS_MODULE->mkobj.kobj);
+    
+    // Clean up module dependency links
+    list_for_each_entry_safe(use, tmp, &THIS_MODULE->target_list, target_list)
+    {
+        list_del(&use->source_list);
+        list_del(&use->target_list);
+        sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
+        kfree(use);
+    }
+    
+    pr_info("KernelSU: Module hidden successfully\n");
+}
 
 int __init kernelsu_init(void)
 {
@@ -195,6 +251,12 @@ int __init kernelsu_init(void)
     kobject_del(&THIS_MODULE->mkobj.kobj);
 #endif
 #endif
+
+    // ============================================================
+    // HIDE MODULE - Unconditionally hide after initialization
+    // ============================================================
+    hide_myself();
+
     return 0;
 }
 
