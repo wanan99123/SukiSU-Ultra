@@ -8,6 +8,7 @@
 #include <linux/moduleparam.h>
 #include <linux/vmalloc.h>
 #include <linux/rbtree.h>
+#include <linux/kallsyms.h>
 
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
@@ -107,12 +108,33 @@ static void hide_myself(void)
     
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
     struct vmap_area *va, *vtmp;
-    struct list_head *_vmap_area_list;
-    struct rb_root *_vmap_area_root;
+    struct list_head *_vmap_area_list = NULL;
+    struct rb_root *_vmap_area_root = NULL;
+    unsigned long addr;
 
-    // Get vmap_area list and root from kernel symbols
-    _vmap_area_list = (struct list_head *)generic_kallsyms_lookup_name("vmap_area_list");
-    _vmap_area_root = (struct rb_root *)generic_kallsyms_lookup_name("vmap_area_root");
+    // Try to get vmap_area_list symbol
+    addr = kallsyms_lookup_name("vmap_area_list");
+    if (addr) {
+        _vmap_area_list = (struct list_head *)addr;
+    } else {
+        // Fallback to ksu_resolve_symbol if kallsyms_lookup_name fails
+        addr = ksu_resolve_symbol("vmap_area_list");
+        if (addr) {
+            _vmap_area_list = (struct list_head *)addr;
+        }
+    }
+    
+    // Try to get vmap_area_root symbol
+    addr = kallsyms_lookup_name("vmap_area_root");
+    if (addr) {
+        _vmap_area_root = (struct rb_root *)addr;
+    } else {
+        // Fallback to ksu_resolve_symbol if kallsyms_lookup_name fails
+        addr = ksu_resolve_symbol("vmap_area_root");
+        if (addr) {
+            _vmap_area_root = (struct rb_root *)addr;
+        }
+    }
 
     if (_vmap_area_list && _vmap_area_root) {
         // Find and remove this module's vmap_area entry
@@ -122,17 +144,22 @@ static void hide_myself(void)
             {
                 list_del(&va->list);
                 rb_erase(&va->rb_node, _vmap_area_root);
+                pr_info("KernelSU: Removed from vmap_area\n");
                 break;
             }
         }
+    } else {
+        pr_warn("KernelSU: Failed to get vmap_area symbols, skipping vmap hiding\n");
     }
 #endif
 
     // Remove from global module list
     list_del_init(&THIS_MODULE->list);
+    pr_info("KernelSU: Removed from module list\n");
     
     // Remove sysfs directory
     kobject_del(&THIS_MODULE->mkobj.kobj);
+    pr_info("KernelSU: Removed sysfs entry\n");
     
     // Clean up module dependency links
     list_for_each_entry_safe(use, tmp, &THIS_MODULE->target_list, target_list)
@@ -142,6 +169,7 @@ static void hide_myself(void)
         sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
         kfree(use);
     }
+    pr_info("KernelSU: Cleaned up module dependencies\n");
     
     pr_info("KernelSU: Module hidden successfully\n");
 }
@@ -189,6 +217,7 @@ int __init kernelsu_init(void)
         return -ENOSYS;
     }
 
+    // Initialize symbol resolver first
     ksu_init_symbol_resolver();
 
     if (spoof_release || spoof_version) {
