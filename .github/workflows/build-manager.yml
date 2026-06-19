@@ -93,7 +93,6 @@ repack-manager:
             echo "SIGN_KEY_PASSWORD=$PROD_KEY_PASSWORD" >> $GITHUB_ENV
             echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
           else
-            echo "⚠️ PROD_KEYSTORE not configured, skipping signing"
             echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
           fi
         fi
@@ -116,9 +115,9 @@ repack-manager:
     - name: Skip repack if no signing key
       if: ${{ env.SIGNING_ENABLED == 'false' }}
       run: |
-        echo "⚠️ No signing key configured, skipping repack"
+        echo "No signing key configured, skipping repack"
         mkdir -p dist
-        echo "No repacked APK generated" > dist/README.txt
+        cp artifacts/manager-gradle/*.apk dist/ || true
 
     - name: Upload build artifact
       if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag' }}
