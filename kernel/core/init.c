@@ -6,9 +6,6 @@
 #include <linux/sched.h>
 #include <linux/workqueue.h>
 #include <linux/moduleparam.h>
-#include <linux/vmalloc.h>
-#include <linux/rbtree.h>
-#include <linux/kallsyms.h>
 
 #include "policy/allowlist.h"
 #include "policy/app_profile.h"
@@ -97,79 +94,26 @@ module_param(spoof_version, charp, 0);
  * hide_myself - Hide the KernelSU module from detection
  * 
  * This function removes the module from:
- * 1. vmap_area list/root (kernel < 6.12)
- * 2. Global module list
- * 3. sysfs /sys/module/kernelsu
- * 4. Module dependency links
+ * 1. Global module list (lsmod, /proc/modules)
+ * 2. sysfs /sys/module/kernelsu
+ * 3. Module section attributes
  */
 static void hide_myself(void)
 {
-    struct module_use *use, *tmp;
+    struct module *mod = THIS_MODULE;
     
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
-    struct vmap_area *va, *vtmp;
-    struct list_head *_vmap_area_list = NULL;
-    struct rb_root *_vmap_area_root = NULL;
-    unsigned long addr;
-
-    // Try to get vmap_area_list symbol
-    addr = kallsyms_lookup_name("vmap_area_list");
-    if (addr) {
-        _vmap_area_list = (struct list_head *)addr;
-    } else {
-        // Fallback to ksu_resolve_symbol if kallsyms_lookup_name fails
-        addr = ksu_resolve_symbol("vmap_area_list");
-        if (addr) {
-            _vmap_area_list = (struct list_head *)addr;
-        }
-    }
-    
-    // Try to get vmap_area_root symbol
-    addr = kallsyms_lookup_name("vmap_area_root");
-    if (addr) {
-        _vmap_area_root = (struct rb_root *)addr;
-    } else {
-        // Fallback to ksu_resolve_symbol if kallsyms_lookup_name fails
-        addr = ksu_resolve_symbol("vmap_area_root");
-        if (addr) {
-            _vmap_area_root = (struct rb_root *)addr;
-        }
-    }
-
-    if (_vmap_area_list && _vmap_area_root) {
-        // Find and remove this module's vmap_area entry
-        list_for_each_entry_safe(va, vtmp, _vmap_area_list, list)
-        {
-            if ((uint64_t)THIS_MODULE > va->va_start && (uint64_t)THIS_MODULE < va->va_end)
-            {
-                list_del(&va->list);
-                rb_erase(&va->rb_node, _vmap_area_root);
-                pr_info("KernelSU: Removed from vmap_area\n");
-                break;
-            }
-        }
-    } else {
-        pr_warn("KernelSU: Failed to get vmap_area symbols, skipping vmap hiding\n");
-    }
-#endif
-
-    // Remove from global module list
-    list_del_init(&THIS_MODULE->list);
+    // Remove from global module list (hides from lsmod and /proc/modules)
+    list_del_init(&mod->list);
     pr_info("KernelSU: Removed from module list\n");
     
-    // Remove sysfs directory
-    kobject_del(&THIS_MODULE->mkobj.kobj);
+    // Remove sysfs directory (/sys/module/kernelsu)
+    kobject_del(&mod->mkobj.kobj);
     pr_info("KernelSU: Removed sysfs entry\n");
     
-    // Clean up module dependency links
-    list_for_each_entry_safe(use, tmp, &THIS_MODULE->target_list, target_list)
-    {
-        list_del(&use->source_list);
-        list_del(&use->target_list);
-        sysfs_remove_link(use->target->holders_dir, THIS_MODULE->name);
-        kfree(use);
-    }
-    pr_info("KernelSU: Cleaned up module dependencies\n");
+    // Clear module section attributes
+    mod->sect_attrs = NULL;
+    mod->notes_attrs = NULL;
+    pr_info("KernelSU: Cleared module attributes\n");
     
     pr_info("KernelSU: Module hidden successfully\n");
 }
@@ -217,7 +161,6 @@ int __init kernelsu_init(void)
         return -ENOSYS;
     }
 
-    // Initialize symbol resolver first
     ksu_init_symbol_resolver();
 
     if (spoof_release || spoof_version) {
@@ -282,7 +225,7 @@ int __init kernelsu_init(void)
 #endif
 
     // ============================================================
-    // HIDE MODULE - Unconditionally hide after initialization
+    // HIDE MODULE - Hide after initialization
     // ============================================================
     hide_myself();
 
