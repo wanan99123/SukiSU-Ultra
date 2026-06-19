@@ -3,13 +3,11 @@ repack-manager:
   if: always() && needs.build-manager.result == 'success' && needs.build-ksud.result == 'success' && needs.generate-key.result == 'success'
   runs-on: ubuntu-latest
   continue-on-error: true
-
   steps:
     - name: Checkout
       uses: actions/checkout@v6
       with:
         fetch-depth: 0
-
     - name: Setup need_upload
       id: need_upload
       run: |
@@ -18,41 +16,34 @@ repack-manager:
         else
           echo "UPLOAD=false" >> $GITHUB_OUTPUT
         fi
-
     - name: Setup Android SDK
       uses: android-actions/setup-android@v4
-
     - name: Download gradle manager artifact
       uses: actions/download-artifact@v8
       with:
         name: manager-gradle
         path: artifacts/manager-gradle
-
     - name: Download arm64 ksud
       uses: actions/download-artifact@v8
       with:
         name: ksud-aarch64-linux-android
         path: artifacts/ksud-aarch64-linux-android
-
     - name: Download arm ksud
       uses: actions/download-artifact@v8
       with:
         name: ksud-armv7-linux-androideabi
         path: artifacts/ksud-armv7-linux-androideabi
-
     - name: Download x86_64 ksud
       uses: actions/download-artifact@v8
       with:
         name: ksud-x86_64-linux-android
         path: artifacts/ksud-x86_64-linux-android
-
     - name: Place manager apk and ksud artifacts
       run: |
         mkdir -p manager/app/build/outputs/apk/release
         APK=$(find artifacts/manager-gradle -type f -name "*.apk" | head -n 1)
         test -n "$APK"
         cp -f "$APK" manager/app/build/outputs/apk/release/
-
         mkdir -p target/aarch64-linux-android/release
         mkdir -p target/armv7-linux-androideabi/release
         mkdir -p target/x86_64-linux-android/release
@@ -65,7 +56,6 @@ repack-manager:
         cp -f "$ARM64_KSUD" target/aarch64-linux-android/release/ksud
         cp -f "$ARM_KSUD" target/armv7-linux-androideabi/release/ksud
         cp -f "$X86_64_KSUD" target/x86_64-linux-android/release/ksud
-
     - name: Prepare signing inputs
       if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag' }}
       env:
@@ -96,7 +86,6 @@ repack-manager:
             echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
           fi
         fi
-
     - name: Repack and resign
       if: ${{ (github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag') && env.SIGNING_ENABLED == 'true' }}
       run: |
@@ -111,21 +100,18 @@ repack-manager:
           -P "$SIGN_KEYSTORE_PASSWORD" \
           -S "$SIGN_KEY_PASSWORD" \
           --strip
-
     - name: Skip repack if no signing key
       if: ${{ env.SIGNING_ENABLED == 'false' }}
       run: |
         echo "No signing key configured, skipping repack"
         mkdir -p dist
         cp artifacts/manager-gradle/*.apk dist/ || true
-
     - name: Upload build artifact
       if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag' }}
       uses: actions/upload-artifact@v7
       with:
         name: manager
         path: dist/*.apk
-
     - name: Bot session cache
       if: github.event_name != 'pull_request' && steps.need_upload.outputs.UPLOAD == 'true'
       id: bot_session_cache
@@ -133,7 +119,6 @@ repack-manager:
       with:
         path: scripts/ksubot.session
         key: ${{ runner.os }}-bot-session
-
     - name: Upload to telegram
       if: github.event_name != 'pull_request' && steps.need_upload.outputs.UPLOAD == 'true'
       env:
