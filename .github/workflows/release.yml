@@ -12,6 +12,7 @@ jobs:
   build-manager:
     uses: ./.github/workflows/build-manager.yml
     secrets: inherit
+
   release:
     needs:
       - build-manager
@@ -34,12 +35,31 @@ jobs:
                  done
               fi
           done
+
+      - name: Rename LKM artifacts
+        run: |
+          echo "===== Renaming LKM artifacts ====="
+          for dir in android*-lkm; do
+            if [ -d "$dir" ]; then
+              echo "Processing $dir..."
+              find "$dir" -name "*.ko" | while read -r ko_file; do
+                kmi_version=$(basename "$dir" | sed 's/-lkm$//')
+                filename=$(basename "$ko_file")
+                if [[ "$filename" != "${kmi_version}_"* ]]; then
+                  new_name="${kmi_version}_${filename}"
+                  echo "Renaming: $ko_file -> $(dirname "$ko_file")/$new_name"
+                  mv "$ko_file" "$(dirname "$ko_file")/$new_name"
+                fi
+              done
+            fi
+          done
+
       - name: Zip AnyKernel3
         run: |
           for dir in AnyKernel3-*; do
             if [ -d "$dir" ]; then
               echo "----- Zip $dir -----"
-              (cd $dir && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..)
+              (cd "$dir" && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..) 2>/dev/null || true
             fi
           done
 
@@ -48,7 +68,7 @@ jobs:
           for dir in kernel-WSA-*; do
             if [ -d "$dir" ]; then
               echo "------ Zip $dir ----------"
-              (cd $dir && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..)
+              (cd "$dir" && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..) 2>/dev/null || true
             fi
           done
 
@@ -57,22 +77,23 @@ jobs:
           for dir in kernel-ARCVM-*; do
             if [ -d "$dir" ]; then
               echo "------ Zip $dir ----------"
-              (cd $dir && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..)
+              (cd "$dir" && zip -r9 "$dir".zip ./* -x .git .gitignore ./*.zip && mv *.zip ..) 2>/dev/null || true
             fi
           done
 
       - name: Display structure of downloaded files
         run: ls -R
 
-      - name: release
+      - name: Create release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             manager/*.apk
-            android*-lkm/*_kernelsu.ko
+            android*-lkm/*.ko
             AnyKernel3-*.zip
             boot-images-*/Image-*/*.img.gz
             kernel-WSA*.zip
             kernel-ARCVM*.zip
             ksud/ksud-*
+          fail_on_unmatched_files: false
