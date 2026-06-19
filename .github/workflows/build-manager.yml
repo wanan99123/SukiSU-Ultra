@@ -57,18 +57,68 @@ repack-manager:
         cp -f "$ARM_KSUD" target/armv7-linux-androideabi/release/ksud
         cp -f "$X86_64_KSUD" target/x86_64-linux-android/release/ksud
     - name: Prepare signing inputs
+      if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag' }}
+      env:
+        PR_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
+        PR_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
+        PR_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
+        PROD_KEYSTORE: ${{ secrets.KEYSTORE }}
+        PROD_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        PROD_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        PROD_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
-    - name: Skip repack (no signing key)
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "$PR_KEYSTORE" | base64 -d > pr-key.jks
+          echo "SIGN_KEYSTORE_FILE=pr-key.jks" >> $GITHUB_ENV
+          echo "SIGN_KEY_ALIAS=pr-key" >> $GITHUB_ENV
+          echo "SIGN_KEYSTORE_PASSWORD=$PR_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "SIGN_KEY_PASSWORD=$PR_KEY_PASSWORD" >> $GITHUB_ENV
+          echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
+        else
+          if [ -n "$PROD_KEYSTORE" ]; then
+            echo "$PROD_KEYSTORE" | base64 -d > key.jks
+            echo "SIGN_KEYSTORE_FILE=key.jks" >> $GITHUB_ENV
+            echo "SIGN_KEY_ALIAS=$PROD_KEY_ALIAS" >> $GITHUB_ENV
+            echo "SIGN_KEYSTORE_PASSWORD=$PROD_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "SIGN_KEY_PASSWORD=$PROD_KEY_PASSWORD" >> $GITHUB_ENV
+            echo "SIGNING_ENABLED=true" >> $GITHUB_ENV
+          else
+            echo "SIGNING_ENABLED=false" >> $GITHUB_ENV
+          fi
+        fi
+    - name: Repack and resign
+      if: ${{ (github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag') && env.SIGNING_ENABLED == 'true' }}
+      run: |
+        python3 repack_apk.py repack \
+          -b release \
+          -t release \
+          -a arm64-v8a \
+          -a armeabi-v7a \
+          -a x86_64 \
+          -K "$SIGN_KEYSTORE_FILE" \
+          -A "$SIGN_KEY_ALIAS" \
+          -P "$SIGN_KEYSTORE_PASSWORD" \
+          -S "$SIGN_KEY_PASSWORD" \
+          --strip
+    - name: Skip repack if no signing key
+      if: ${{ env.SIGNING_ENABLED == 'false' }}
       run: |
         echo "No signing key configured, skipping repack"
         mkdir -p dist
         cp artifacts/manager-gradle/*.apk dist/ || true
     - name: Upload build artifact
+      if: ${{ github.event_name == 'pull_request' || (github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || github.ref_type == 'tag' }}
       uses: actions/upload-artifact@v7
       with:
         name: manager
         path: dist/*.apk
+    - name: Bot session cache
+      if: github.event_name != 'pull_request' && steps.need_upload.outputs.UPLOAD == 'true'
+      id: bot_session_cache
+      uses: actions/cache@v5
+      with:
+        path: scripts/ksubot.session
+        key: ${{ runner.os }}-bot-session
     - name: Upload to telegram
       if: github.event_name != 'pull_request' && steps.need_upload.outputs.UPLOAD == 'true'
       env:
